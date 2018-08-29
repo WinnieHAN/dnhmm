@@ -104,6 +104,7 @@ function model_utils.combine_all_parameters(...)
     local flatGradParameters = flatten(gradParameters)
 
     -- return new flat vector that contains all discrete parameters
+--    print(flatParameters)
     return flatParameters, flatGradParameters
 end
 

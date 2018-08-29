@@ -54,7 +54,6 @@ function BaumWelch:run(input, stats)
     prob_prior:resizeAs(log_prior):copy(log_prior):exp()
     prob_trans:resizeAs(log_trans):copy(log_trans):exp()
     prob_emiss:resizeAs(log_emiss):copy(log_emiss):exp()
-
     local masked = input:ne(self.padidx)
     -- we need this for computing correctly the log-likelihood
     local masked_pad = input:eq(self.padidx)
@@ -105,7 +104,6 @@ function BaumWelch:run(input, stats)
     -- eos: is used to check the true eos, after this point, pad appears
     -- because pad is always at the end of the sequence,
     -- we will do it in one go
-
     local eos = masked[{{}, {1, T-1}}]:ne(masked[{{}, {2, T}}])
     for t = T-1, 1, -1 do
         local eos_t = eos[{{}, {t}}]:expand(N, K)
@@ -143,6 +141,8 @@ function BaumWelch:run(input, stats)
     end
     -- comment out the following line (renorm) in debugging mode
     utils.renorm(gamma, 3)
+--    print(input[{{}, {1}}])
+    masked = masked:type('torch.CudaTensor')  --hanwj
     gamma:cmul(masked:view(N, T, 1):expand(N, T, K))
 
    --[[ Compute eta

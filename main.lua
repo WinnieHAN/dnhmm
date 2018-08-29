@@ -156,7 +156,6 @@ function train()
                 local log_trans = trans_net:log_prob(input)
                 local log_emiss = emiss_net:log_prob(input)
                 local stats = {log_emiss, log_trans, log_prior}
-
                 count, f = inference:run(input, stats)
                 if not prev_f then
                     prev_f = f
@@ -224,7 +223,7 @@ function train()
         elseif nprobes == 0 then
             -- load file, recover all optimization states
             print('end of probing, use the best probing model to continue training!')
-            local probe_states = torch.load(modelfile)
+            local probe_states = torch.load(modelfile) -- torch.load('/home/hanwj/Code/save/lstmconv.iter0.t7') --
             params:copy(probe_states.params)
             optim_config = probe_states.optim_config
             optim_states = probe_states.optim_states
@@ -245,7 +244,7 @@ function infer(textfile, predfile, modelfile)
     -- batch inference
     print(string.format('load model: %s', modelfile))
     params:copy(torch.load(modelfile))
-    emiss_net:precompute()
+--    emiss_net:precompute()
     trans_net:evaluate()
     emiss_net:evaluate()
     prior_net:evaluate()

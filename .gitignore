@@ -1,0 +1,7 @@
+saved_model
+-tagged_file.txt
+tagged_file.txt
+.*
+*~
+temp.lua
+wsj_run.sh
