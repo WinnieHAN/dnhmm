@@ -1,6 +1,7 @@
 local model, parent = torch.class('nn.EmiNet', 'nn.Module')
 --require 'nn'
 require 'rnn'
+require 'modules/Gaussian'
 
 debug_ori = 0
 
@@ -20,6 +21,7 @@ function model:__init(nobs, nvars, hidsize)
         self.net:add(nn.LogSoftMax())
     else
         local outputsize_lstm = 5
+        local s_dim = 5
         local mlp = nn.Sequential()
 
         local para = nn.ParallelTable()
@@ -37,22 +39,51 @@ function model:__init(nobs, nvars, hidsize)
         local seqlstm = nn.SeqLSTM(H, outputsize_lstm)
         seqlstm.batchfirst = true
         lstm:add(seqlstm)
-        lstm:add(nn.Select(2,-1))
-        lstm:add(nn.Replicate(K,2))
+        lstm:add(nn.Select(2,-1))  -- N*outputsize_lstm
+        lstm:add(nn.ReLU(true))
+        local zLayer = nn.ConcatTable()
+        zLayer:add(nn.Linear(outputsize_lstm, s_dim)) -- Mean μ of Z
+        zLayer:add(nn.Linear(outputsize_lstm, s_dim)) -- Log variance σ^2 of Z (diagonal covariance)
+        lstm:add(zLayer) -- Add Z parameter layer
 
-        para:add(lstm)
+        -- Create σε module
+        local noiseModule = nn.Sequential()
+        local noiseModuleInternal = nn.ConcatTable()
+        local stdModule = nn.Sequential()
+        stdModule:add(nn.MulConstant(0.5)) -- Compute 1/2 log σ^2 = log σ
+        stdModule:add(nn.Exp()) -- Compute σ
+        noiseModuleInternal:add(stdModule) -- Standard deviation σ
+        noiseModuleInternal:add(nn.Gaussian(0, 1)) -- Sample noise ε ~ N(0, 1)
+        noiseModule:add(noiseModuleInternal)
+        noiseModule:add(nn.CMulTable()) -- Compute σε
+        -- Create sampler q(z) = N(z; μ, σI) = μ + σε (reparametrization trick)
+        local sampler = nn.Sequential()
+        local samplerInternal = nn.ParallelTable()
+        samplerInternal:add(nn.Identity()) -- Pass through μ
+        samplerInternal:add(noiseModule) -- Create noise σ * ε
+        sampler:add(samplerInternal)
+        sampler:add(nn.CAddTable())
+        -- ---------------
 
+        local lstm_rep = nn.Sequential()
+        lstm_rep:add(lstm)
+        lstm_rep:add(sampler)
+        lstm_rep:add(nn.Replicate(K,2))
+
+        para:add(lstm_rep)
 
         mlp:add(para)
         mlp:add(nn.JoinTable(3))
         mlp:add(nn.Bottle(nn.Linear(H+outputsize_lstm, H)))
+--        mlp:add(nn.Dropout())
         mlp:add(nn.Bottle(nn.ReLU()))
         mlp:add(nn.Bottle(nn.Linear(H, V)))
+--        mlp:add(nn.Dropout())
         mlp:add(nn.Bottle(nn.LogSoftMax()))
         mlp:add(nn.View(-1,V))
 
         self.net = mlp
-
+        self.encoder = lstm_rep
         self.deb = mlp --debug
     end
 
@@ -89,8 +120,8 @@ function model:log_prob(input)
 --        local K = 45 -- define
         local tags = torch.range(1,self.K)
         self._input = tags:view(1,-1):expand(N,self.K):contiguous():view(-1,self.K)
+--        print(self.encoder:forward(input):size())
         self._logp = self.net:forward{self._input, input} --:view(N*T, -1):index(2, input:view(-1)):view(N, T, -1) 256,45,355535
---        print(self.deb:forward{self._input, input}:size())
 --        print('_logp initial')
 --        print(self._logp:size())
 --        self._logp = self._logp:view(N,self.K,-1):index(3,torch.range(1,T):long()):transpose(2, 3) -- wrong
