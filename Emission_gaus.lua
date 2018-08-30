@@ -1,3 +1,4 @@
+
 local model, parent = torch.class('nn.EmiNet', 'nn.Module')
 --require 'nn'
 require 'rnn'
@@ -9,7 +10,6 @@ function model:__init(nobs, nvars, hidsize)
     local K, V, H = nvars, nobs, hidsize  -- K: #tags V: #words
     self.K = K
     self.V= V
-    self.H = H
     self._input = torch.Tensor()--torch.range(1, K)
 
     if (debug_ori==1)  then
@@ -36,7 +36,7 @@ function model:__init(nobs, nvars, hidsize)
 
         local lstm = nn.Sequential()
         lstm:add(nn.LookupTable(V, H))
-        lstm:add(nn.WhiteNoise(0, 0.5), 1)   -- for denoising VAE
+        lstm:add(nn.Dropout())   -- denoising
         lstm:add(nn.ReLU())
         local seqlstm = nn.SeqLSTM(H, outputsize_lstm)
         seqlstm.batchfirst = true
@@ -77,15 +77,15 @@ function model:__init(nobs, nvars, hidsize)
         mlp:add(para)
         mlp:add(nn.JoinTable(3))
         mlp:add(nn.Bottle(nn.Linear(H+outputsize_lstm, H)))
---        mlp:add(nn.Dropout())
+        --        mlp:add(nn.Dropout())
         mlp:add(nn.Bottle(nn.ReLU()))
         mlp:add(nn.Bottle(nn.Linear(H, V)))
---        mlp:add(nn.Dropout())
+        --        mlp:add(nn.Dropout())
         mlp:add(nn.Bottle(nn.LogSoftMax()))
         mlp:add(nn.View(-1,V))
 
         self.net = mlp
-        self.encoder = lstm
+        self.encoder = lstm_rep
         self.deb = mlp --debug
     end
 
@@ -115,59 +115,48 @@ function model:log_prob(input)
             self._logp = self._cache --45,35534
         end
         local out_s = self._logp:index(2, input:view(-1)):view(-1, N, T):transpose(1, 2):transpose(2, 3)
---        print(out_s:size())  --256, 20, 45
---        print(input:size())  --256, 20
+        --        print(out_s:size())  --256, 20, 45
+        --        print(input:size())  --256, 20
         return out_s
     else
---        local K = 45 -- define
+        --        local K = 45 -- define
         local tags = torch.range(1,self.K)
         self._input = tags:view(1,-1):expand(N,self.K):contiguous():view(-1,self.K)
---        print(self.encoder:forward(input):size())
+        --        print(self.encoder:forward(input):size())
         self._logp = self.net:forward{self._input, input} --:view(N*T, -1):index(2, input:view(-1)):view(N, T, -1) 256,45,355535
---        print('_logp initial')
---        print(self._logp:size())
---        self._logp = self._logp:view(N,self.K,-1):index(3,torch.range(1,T):long()):transpose(2, 3) -- wrong
+        --        print('_logp initial')
+        --        print(self._logp:size())
+        --        self._logp = self._logp:view(N,self.K,-1):index(3,torch.range(1,T):long()):transpose(2, 3) -- wrong
         self._logp = torch.expand(self._logp:view(N,1,self.K,-1), N,T,self.K,self.V) --:contiguous():view(N*T,self.K,self.V)
---        print('_logp before gather')
---        print(self._logp:size())  --152 45 , 35535
+        --        print('_logp before gather')
+        --        print(self._logp:size())  --152 45 , 35535
         local indexs = torch.expand(input:view(N,T,1,1), N,T,self.K,1)
 
         self._logp = self._logp:gather(4, indexs):view(N,T,self.K)
---        print('_logp after gather')
---        print(self._logp:size()) --256 20 45
+        --        print('_logp after gather')
+        --        print(self._logp:size()) --256 20 45
         return self._logp --:type(torch.CudaTensor)
     end
 end
 
 function model:update(input, gradOutput)
---    print('gradOutput  ')
---    print(gradOutput:size()) -- 256,20,45
+    --    print('gradOutput  ')
+    --    print(gradOutput:size()) -- 256,20,45
     local K,V=self.K, self.V
     local N, T = input:size(1), input:size(2)
     local dx = gradOutput:transpose(2, 3):transpose(1, 2)
     self._buffer:resizeAs(dx):copy(dx)
     self.gradOutput = torch.CudaTensor(N*K,V)
     self.gradOutput:zero()
---    print('input:  ')
---    print(input:size())
---    print('self._buffer:view(-1, N * T): ')
---    print(self._buffer:view(-1, N * T):size())
+    --    print('input:  ')
+    --    print(input:size())
+    --    print('self._buffer:view(-1, N * T): ')
+    --    print(self._buffer:view(-1, N * T):size())
     self.gradOutput:indexAdd(2, input:view(-1), self._buffer:view(-1, N * T))
---    print('self.gradOutput  ')
---    print(self.gradOutput:size())
---    print(self.gradOutput:type()) --45 35535
+    --    print('self.gradOutput  ')
+    --    print(self.gradOutput:size())
+    --    print(self.gradOutput:type()) --45 35535
     self.net:backward({self._input, input}, self.gradOutput)
-    local isVAE = true
-    if (isVAE) then
-        -- Optimise Gaussian KL divergence between inference model and prior: DKL[q(z|x)||N(0, σI)] = log(σ2/σ1) + ((σ1^2 - σ2^2) + (μ1 - μ2)^2) / 2σ2^2
-        local nElements = N*T*self.H
-        local mean, logVar = table.unpack(self.encoder.output)
-        local var = torch.exp(logVar)
-        local KLLoss = 0.5 * torch.sum(torch.pow(mean, 2) + var - logVar - 1)
-        KLLoss = KLLoss / nElements -- Normalise loss (same normalisation as BCECriterion)
-        local gradKLLoss = {mean / nElements, 0.5*(var - 1) / nElements}  -- Normalise gradient of loss (same normalisation as BCECriterion)
-        self.encoder:backward(input, gradKLLoss)
-    end
 end
 
 
